@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { writeAllAuthFiles, writeAuthFile, writeCodexAuthFile, writePiAuthFile } from "./auth";
+import { writeAllAuthFiles, writeAuthFile, writeAuthFiles, writeCodexAuthFile, writePiAuthFile } from "./auth";
+import { switchNext, switchToAccount } from "./commands/switch";
 import { loadConfig, saveConfig } from "./config";
 import { createTestPaths, getPaths, resetPaths, setPaths } from "./paths";
 import { writeActiveAuthFilesIfCurrent } from "./refresh";
@@ -61,6 +62,16 @@ const createInMemorySecretStoreAdapter = (
     listAccountIds: async () => [...payloads.keys()],
     getCapability: () => ({ available: true }),
   };
+};
+
+const silenceStdout = async (fn: () => Promise<void>): Promise<void> => {
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  try {
+    await fn();
+  } finally {
+    process.stdout.write = originalWrite;
+  }
 };
 
 describe("switch command utilities", () => {
@@ -274,6 +285,87 @@ describe("switch command utilities", () => {
     });
   });
 
+  describe("writeAuthFiles", () => {
+    it("writes all supported auth files when targets are not configured through writeAllAuthFiles", async () => {
+      const result = await writeAllAuthFiles(TEST_PAYLOAD_1);
+
+      const { authPath, codexAuthPath, piAuthPath } = getPaths();
+      expect(existsSync(authPath)).toBe(true);
+      expect(existsSync(codexAuthPath)).toBe(true);
+      expect(existsSync(piAuthPath)).toBe(true);
+      expect(result.targetResults).toEqual({
+        opencode: "written",
+        codex: "written",
+        pi: "written",
+      });
+    });
+
+    it("updates OpenCode only when targets contains only opencode", async () => {
+      const result = await writeAuthFiles(TEST_PAYLOAD_1, ["opencode"]);
+
+      const { authPath, codexAuthPath, piAuthPath } = getPaths();
+      expect(existsSync(authPath)).toBe(true);
+      expect(existsSync(codexAuthPath)).toBe(false);
+      expect(existsSync(piAuthPath)).toBe(false);
+      expect(result.opencodeWritten).toBe(true);
+      expect(result.codexWritten).toBe(false);
+      expect(result.piWritten).toBe(false);
+      expect(result.targetResults.codex).toBe("skipped");
+      expect(result.targetResults.pi).toBe("skipped");
+    });
+
+    it("leaves existing Codex auth unchanged when only OpenCode is targeted", async () => {
+      const { codexAuthPath } = getPaths();
+      await mkdirSync(path.dirname(codexAuthPath), { recursive: true });
+      const existing = JSON.stringify({ tokens: { account_id: "codex-stays" } }, null, 2);
+      await writeFile(codexAuthPath, existing, "utf8");
+
+      await writeAuthFiles(TEST_PAYLOAD_1, ["opencode"]);
+
+      await expect(readFile(codexAuthPath, "utf8")).resolves.toBe(existing);
+    });
+
+    it("leaves existing Pi auth unchanged when only OpenCode is targeted", async () => {
+      const { piAuthPath } = getPaths();
+      await mkdirSync(path.dirname(piAuthPath), { recursive: true });
+      const existing = JSON.stringify({ "openai-codex": { accountId: "pi-stays" } }, null, 2);
+      await writeFile(piAuthPath, existing, "utf8");
+
+      await writeAuthFiles(TEST_PAYLOAD_1, ["opencode"]);
+
+      await expect(readFile(piAuthPath, "utf8")).resolves.toBe(existing);
+    });
+
+    it("does not delete Codex auth when only OpenCode is targeted and idToken is missing", async () => {
+      const { codexAuthPath } = getPaths();
+      await mkdirSync(path.dirname(codexAuthPath), { recursive: true });
+      const existing = JSON.stringify({ tokens: { account_id: "codex-stays" } }, null, 2);
+      await writeFile(codexAuthPath, existing, "utf8");
+
+      const result = await writeAuthFiles(TEST_PAYLOAD_2, ["opencode"]);
+
+      expect(existsSync(codexAuthPath)).toBe(true);
+      await expect(readFile(codexAuthPath, "utf8")).resolves.toBe(existing);
+      expect(result.codexMissingIdToken).toBe(false);
+      expect(result.codexCleared).toBe(false);
+      expect(result.targetResults.codex).toBe("skipped");
+    });
+
+    it("updates multiple selected targets", async () => {
+      const result = await writeAuthFiles(TEST_PAYLOAD_1, ["opencode", "pi"]);
+
+      const { authPath, codexAuthPath, piAuthPath } = getPaths();
+      expect(existsSync(authPath)).toBe(true);
+      expect(existsSync(piAuthPath)).toBe(true);
+      expect(existsSync(codexAuthPath)).toBe(false);
+      expect(result.targetResults).toEqual({
+        opencode: "written",
+        codex: "skipped",
+        pi: "written",
+      });
+    });
+  });
+
   describe("writeActiveAuthFilesIfCurrent", () => {
     it("updates auth files when refreshed account is current", async () => {
       const config: Config = {
@@ -296,6 +388,39 @@ describe("switch command utilities", () => {
       expect(existsSync(piAuthPath)).toBe(true);
     });
 
+    it("respects configured targets when refreshed account is current", async () => {
+      const config: Config = {
+        current: 0,
+        targets: ["opencode"],
+        accounts: [
+          { accountId: TEST_ACCOUNT_1, keychainService: "cdx-openai-" + TEST_ACCOUNT_1 },
+          { accountId: TEST_ACCOUNT_2, keychainService: "cdx-openai-" + TEST_ACCOUNT_2 },
+        ],
+      };
+
+      const { codexAuthPath, piAuthPath } = getPaths();
+      await mkdirSync(path.dirname(codexAuthPath), { recursive: true });
+      await mkdirSync(path.dirname(piAuthPath), { recursive: true });
+      const codexExisting = JSON.stringify({ tokens: { account_id: "codex-stays" } }, null, 2);
+      const piExisting = JSON.stringify({ "openai-codex": { accountId: "pi-stays" } }, null, 2);
+      await writeFile(codexAuthPath, codexExisting, "utf8");
+      await writeFile(piAuthPath, piExisting, "utf8");
+
+      await saveConfig(config);
+
+      const result = await writeActiveAuthFilesIfCurrent(TEST_ACCOUNT_1);
+
+      const { authPath } = getPaths();
+      expect(result?.targetResults).toEqual({
+        opencode: "written",
+        codex: "skipped",
+        pi: "skipped",
+      });
+      expect(existsSync(authPath)).toBe(true);
+      await expect(readFile(codexAuthPath, "utf8")).resolves.toBe(codexExisting);
+      await expect(readFile(piAuthPath, "utf8")).resolves.toBe(piExisting);
+    });
+
     it("skips auth file updates when refreshed account is not current", async () => {
       const config: Config = {
         current: 0,
@@ -314,6 +439,124 @@ describe("switch command utilities", () => {
       expect(existsSync(authPath)).toBe(false);
       expect(existsSync(codexAuthPath)).toBe(false);
       expect(existsSync(piAuthPath)).toBe(false);
+    });
+  });
+
+  describe("switch commands", () => {
+    it("respects configured targets when switching directly", async () => {
+      await saveConfig({
+        current: 1,
+        targets: ["opencode"],
+        accounts: [
+          { accountId: TEST_ACCOUNT_1, keychainService: "cdx-openai-" + TEST_ACCOUNT_1 },
+          { accountId: TEST_ACCOUNT_2, keychainService: "cdx-openai-" + TEST_ACCOUNT_2 },
+        ],
+      });
+
+      const { codexAuthPath, piAuthPath } = getPaths();
+      await mkdirSync(path.dirname(codexAuthPath), { recursive: true });
+      await mkdirSync(path.dirname(piAuthPath), { recursive: true });
+      const codexExisting = JSON.stringify({ tokens: { account_id: "codex-stays" } }, null, 2);
+      const piExisting = JSON.stringify({ "openai-codex": { accountId: "pi-stays" } }, null, 2);
+      await writeFile(codexAuthPath, codexExisting, "utf8");
+      await writeFile(piAuthPath, piExisting, "utf8");
+
+      await silenceStdout(() => switchToAccount(TEST_ACCOUNT_1));
+
+      const { authPath } = getPaths();
+      const auth = JSON.parse(await readFile(authPath, "utf8"));
+      const config = await loadConfig();
+      expect(config.current).toBe(0);
+      expect(auth.openai.accountId).toBe(TEST_ACCOUNT_1);
+      await expect(readFile(codexAuthPath, "utf8")).resolves.toBe(codexExisting);
+      await expect(readFile(piAuthPath, "utf8")).resolves.toBe(piExisting);
+    });
+
+    it("uses switch targets override without saving it to config", async () => {
+      await saveConfig({
+        current: 1,
+        targets: ["opencode", "codex", "pi"],
+        accounts: [
+          { accountId: TEST_ACCOUNT_1, keychainService: "cdx-openai-" + TEST_ACCOUNT_1 },
+          { accountId: TEST_ACCOUNT_2, keychainService: "cdx-openai-" + TEST_ACCOUNT_2 },
+        ],
+      });
+
+      const { piAuthPath } = getPaths();
+      await mkdirSync(path.dirname(piAuthPath), { recursive: true });
+      const piExisting = JSON.stringify({ "openai-codex": { accountId: "pi-stays" } }, null, 2);
+      await writeFile(piAuthPath, piExisting, "utf8");
+
+      await silenceStdout(() => switchToAccount(TEST_ACCOUNT_1, ["opencode", "codex"]));
+
+      const { authPath, codexAuthPath } = getPaths();
+      const auth = JSON.parse(await readFile(authPath, "utf8"));
+      const codexAuth = JSON.parse(await readFile(codexAuthPath, "utf8"));
+      const config = await loadConfig();
+      expect(config.current).toBe(0);
+      expect(config.targets).toEqual(["opencode", "codex", "pi"]);
+      expect(auth.openai.accountId).toBe(TEST_ACCOUNT_1);
+      expect(codexAuth.tokens.account_id).toBe(TEST_ACCOUNT_1);
+      await expect(readFile(piAuthPath, "utf8")).resolves.toBe(piExisting);
+    });
+
+    it("respects configured targets when switching to next account", async () => {
+      await saveConfig({
+        current: 0,
+        targets: ["opencode"],
+        accounts: [
+          { accountId: TEST_ACCOUNT_1, keychainService: "cdx-openai-" + TEST_ACCOUNT_1 },
+          { accountId: TEST_ACCOUNT_2, keychainService: "cdx-openai-" + TEST_ACCOUNT_2 },
+        ],
+      });
+
+      const { codexAuthPath, piAuthPath } = getPaths();
+      await mkdirSync(path.dirname(codexAuthPath), { recursive: true });
+      await mkdirSync(path.dirname(piAuthPath), { recursive: true });
+      const codexExisting = JSON.stringify({ tokens: { account_id: "codex-stays" } }, null, 2);
+      const piExisting = JSON.stringify({ "openai-codex": { accountId: "pi-stays" } }, null, 2);
+      await writeFile(codexAuthPath, codexExisting, "utf8");
+      await writeFile(piAuthPath, piExisting, "utf8");
+
+      await silenceStdout(() => switchNext());
+
+      const { authPath } = getPaths();
+      const auth = JSON.parse(await readFile(authPath, "utf8"));
+      const config = await loadConfig();
+      expect(config.current).toBe(1);
+      expect(auth.openai.accountId).toBe(TEST_ACCOUNT_2);
+      await expect(readFile(codexAuthPath, "utf8")).resolves.toBe(codexExisting);
+      await expect(readFile(piAuthPath, "utf8")).resolves.toBe(piExisting);
+    });
+
+    it("uses switch next targets override without saving it to config", async () => {
+      await saveConfig({
+        current: 0,
+        targets: ["opencode", "codex", "pi"],
+        accounts: [
+          { accountId: TEST_ACCOUNT_1, keychainService: "cdx-openai-" + TEST_ACCOUNT_1 },
+          { accountId: TEST_ACCOUNT_2, keychainService: "cdx-openai-" + TEST_ACCOUNT_2 },
+        ],
+      });
+
+      const { codexAuthPath, piAuthPath } = getPaths();
+      await mkdirSync(path.dirname(codexAuthPath), { recursive: true });
+      await mkdirSync(path.dirname(piAuthPath), { recursive: true });
+      const codexExisting = JSON.stringify({ tokens: { account_id: "codex-stays" } }, null, 2);
+      const piExisting = JSON.stringify({ "openai-codex": { accountId: "pi-stays" } }, null, 2);
+      await writeFile(codexAuthPath, codexExisting, "utf8");
+      await writeFile(piAuthPath, piExisting, "utf8");
+
+      await silenceStdout(() => switchNext(["opencode"]));
+
+      const { authPath } = getPaths();
+      const auth = JSON.parse(await readFile(authPath, "utf8"));
+      const config = await loadConfig();
+      expect(config.current).toBe(1);
+      expect(config.targets).toEqual(["opencode", "codex", "pi"]);
+      expect(auth.openai.accountId).toBe(TEST_ACCOUNT_2);
+      await expect(readFile(codexAuthPath, "utf8")).resolves.toBe(codexExisting);
+      await expect(readFile(piAuthPath, "utf8")).resolves.toBe(piExisting);
     });
   });
 

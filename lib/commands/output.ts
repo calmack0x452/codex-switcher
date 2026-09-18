@@ -1,4 +1,6 @@
 import type { WriteAuthResult } from "../auth";
+import { AUTH_TARGET_LABELS, AUTH_TARGETS } from "../auth-targets";
+import type { AuthTarget } from "../types";
 
 type CodexStatus = Pick<WriteAuthResult, "codexWritten" | "codexCleared">;
 
@@ -8,26 +10,44 @@ export const formatCodexMark = (result: CodexStatus): string => {
   return "⚠ missing id_token";
 };
 
+export const formatAuthTargetMark = (
+  result: Pick<WriteAuthResult, "targetResults">,
+  target: AuthTarget,
+): string => {
+  switch (result.targetResults[target]) {
+    case "written":
+      return "✓";
+    case "cleared-missing-id-token":
+      return "⚠ missing id_token (cleared)";
+    case "missing-id-token":
+      return "⚠ missing id_token";
+    case "skipped":
+      return "skipped";
+  }
+};
+
+export const getAuthTargetSummaryLines = (
+  result: Pick<WriteAuthResult, "targetResults">,
+): string[] =>
+  AUTH_TARGETS.map((target) =>
+    `  ${AUTH_TARGET_LABELS[target]}: ${formatAuthTargetMark(result, target)}`,
+  );
+
 export const writeSwitchSummary = (
   displayName: string,
-  result: Pick<WriteAuthResult, "piWritten" | "codexWritten" | "codexCleared">,
+  result: Pick<WriteAuthResult, "targetResults">,
 ): void => {
-  const piMark = result.piWritten ? "✓" : "✗";
-  const codexMark = formatCodexMark(result);
-
   process.stdout.write(`Switched to account ${displayName}\n`);
-  process.stdout.write("  OpenCode:  ✓\n");
-  process.stdout.write(`  Pi Agent:  ${piMark}\n`);
-  process.stdout.write(`  Codex CLI: ${codexMark}\n`);
+  for (const line of getAuthTargetSummaryLines(result)) {
+    process.stdout.write(`${line}\n`);
+  }
 };
 
 export const writeUpdatedAuthSummary = (
-  result: Pick<WriteAuthResult, "piWritten" | "codexWritten" | "codexCleared">,
+  result: Pick<WriteAuthResult, "targetResults">,
 ): void => {
-  const piMark = result.piWritten ? "✓" : "✗";
-  const codexMark = formatCodexMark(result);
   process.stdout.write("Updated active auth files:\n");
-  process.stdout.write("  OpenCode:  ✓\n");
-  process.stdout.write(`  Pi Agent:  ${piMark}\n`);
-  process.stdout.write(`  Codex CLI: ${codexMark}\n`);
+  for (const line of getAuthTargetSummaryLines(result)) {
+    process.stdout.write(`${line}\n`);
+  }
 };

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { AUTH_TARGETS, normalizeAuthTargets } from "./auth-targets";
 import { getPaths } from "./paths";
 import type { Config, SecretStoreSelection } from "./types";
 
@@ -48,6 +49,13 @@ export const loadConfig = async (): Promise<Config> => {
 
   if (!isSecretStoreSelection(parsed.secretStore)) {
     delete parsed.secretStore;
+  }
+
+  parsed.targets = normalizeAuthTargets(parsed.targets);
+  if (parsed.targets.length === 0) {
+    throw new Error(
+      `accounts.json targets must include at least one valid auth target: ${AUTH_TARGETS.join(", ")}.`,
+    );
   }
 
   return parsed;

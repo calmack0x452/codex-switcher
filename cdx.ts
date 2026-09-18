@@ -17,6 +17,7 @@ import {
   registerReloginCommand,
   registerStatusCommand,
   registerSwitchCommand,
+  registerTargetsCommand,
   registerUpdateSelfCommand,
   registerUsageCommand,
   registerVersionCommand,
@@ -32,9 +33,10 @@ import {
   type SecretStoreSelection,
 } from "./lib/secrets/store";
 
-export type { AccountRecord, Config, OAuthPayload } from "./lib/types";
+export type { AccountRecord, AuthTarget, Config, OAuthPayload } from "./lib/types";
 export { loadConfig, saveConfig } from "./lib/config";
-export { writeAuthFile, writeCodexAuthFile, writePiAuthFile, writeAllAuthFiles } from "./lib/auth";
+export { writeAuthFile, writeAuthFiles, writeCodexAuthFile, writePiAuthFile, writeAllAuthFiles } from "./lib/auth";
+export { AUTH_TARGETS, DEFAULT_AUTH_TARGETS, parseAuthTargets } from "./lib/auth-targets";
 export { getPaths, setPaths, resetPaths, createTestPaths } from "./lib/paths";
 export {
   createRuntimeSecretStoreAdapter,
@@ -165,10 +167,30 @@ const configureTabCompletion = (completion: TabCompletion): void => {
     };
   }
 
+  const targetsOption = completion.options.get("targets");
+  if (targetsOption) {
+    targetsOption.handler = (complete) => {
+      complete("opencode", "OpenCode auth file");
+      complete("codex", "Codex CLI auth file");
+      complete("pi", "Pi Agent auth file");
+      complete("opencode,codex", "OpenCode and Codex CLI auth files");
+      complete("opencode,codex,pi", "All auth files");
+    };
+  }
+
   attachAccountArgumentCompletion(completion, "switch", "account-id");
   attachAccountArgumentCompletion(completion, "relogin", "account");
   attachAccountArgumentCompletion(completion, "usage", "account");
   attachAccountArgumentCompletion(completion, "label", "account");
+
+  const targetsCommand = completion.commands.get("targets");
+  if (targetsCommand) {
+    targetsCommand.argument("targets", (complete) => {
+      complete("opencode", "OpenCode auth file");
+      complete("codex", "Codex CLI auth file");
+      complete("pi", "Pi Agent auth file");
+    });
+  }
 
   const helpCommand = completion.commands.get("help");
   if (helpCommand) {
@@ -257,6 +279,7 @@ export const createProgram = (
   registerLoginCommand(program, deps);
   registerReloginCommand(program);
   registerSwitchCommand(program);
+  registerTargetsCommand(program);
   registerLabelCommand(program);
   registerMigrateSecretsCommand(program);
   registerKeyringCommand(program);

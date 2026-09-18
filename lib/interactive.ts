@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
-import { writeAllAuthFiles } from "./auth";
+import { writeAuthFiles } from "./auth";
+import { getAuthTargetSummaryLines } from "./commands/output";
 import { configExists, loadConfig, saveConfig } from "./config";
 import {
   performLogin,
@@ -9,7 +10,7 @@ import {
 import { getSecretStoreAdapter } from "./secrets/store";
 import { writeActiveAuthFilesIfCurrent } from "./refresh";
 import { formatExpiry, getStatus } from "./status";
-import type { Config } from "./types";
+import type { AuthTarget, Config } from "./types";
 
 type MenuAction = "list" | "switch" | "add" | "relogin" | "remove" | "label" | "status" | "exit";
 
@@ -70,7 +71,9 @@ const handleListAccounts = async (): Promise<void> => {
   }
 };
 
-export const handleSwitchAccount = async (): Promise<void> => {
+export const handleSwitchAccount = async (
+  targetsOverride?: readonly AuthTarget[],
+): Promise<void> => {
   if (!configExists()) {
     p.log.warning("No accounts configured. Use 'Add account' first.");
     return;
@@ -125,23 +128,16 @@ export const handleSwitchAccount = async (): Promise<void> => {
     return;
   }
 
-  const result = await writeAllAuthFiles(payload);
+  const result = await writeAuthFiles(payload, targetsOverride ?? config.targets ?? []);
 
   config.current = selected as number;
   await saveConfig(config);
 
   const displayName = selectedAccount.label ?? selectedAccount.accountId;
-  const opencodeMark = "✓";
-  const piMark = result.piWritten ? "✓" : "✗";
-  const codexMark = result.codexWritten
-    ? "✓"
-    : result.codexCleared
-      ? "⚠ missing id_token (cleared)"
-      : "⚠ missing id_token";
   p.log.success(`Switched to account ${displayName}`);
-  p.log.message(`  OpenCode:  ${opencodeMark}`);
-  p.log.message(`  Pi Agent:  ${piMark}`);
-  p.log.message(`  Codex CLI: ${codexMark}`);
+  for (const line of getAuthTargetSummaryLines(result)) {
+    p.log.message(line);
+  }
 };
 
 const handleAddAccount = async (): Promise<void> => {
@@ -202,16 +198,10 @@ export const handleReloginAccount = async (
     } else {
       const authResult = await writeActiveAuthFilesIfCurrent(result.accountId);
       if (authResult) {
-        const piMark = authResult.piWritten ? "✓" : "✗";
-        const codexMark = authResult.codexWritten
-          ? "✓"
-          : authResult.codexCleared
-            ? "⚠ missing id_token (cleared)"
-            : "⚠ missing id_token";
         p.log.message("Updated active auth files:");
-        p.log.message("  OpenCode:  ✓");
-        p.log.message(`  Pi Agent:  ${piMark}`);
-        p.log.message(`  Codex CLI: ${codexMark}`);
+        for (const line of getAuthTargetSummaryLines(authResult)) {
+          p.log.message(line);
+        }
       }
     }
   } catch (error) {

@@ -1,5 +1,7 @@
 export type SecretStoreSelection = "auto" | "legacy-keychain";
 
+export type AuthTarget = "opencode" | "codex" | "pi";
+
 export type AccountRecord = {
   accountId: string;
   keychainService: string;
@@ -9,6 +11,7 @@ export type AccountRecord = {
 export type Config = {
   current: number;
   accounts: AccountRecord[];
+  targets?: AuthTarget[];
   secretStore?: SecretStoreSelection;
 };
 

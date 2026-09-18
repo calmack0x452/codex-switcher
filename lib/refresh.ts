@@ -1,4 +1,4 @@
-import { writeAllAuthFiles, type WriteAuthResult } from "./auth";
+import { writeAuthFiles, type WriteAuthResult } from "./auth";
 import { configExists, loadConfig } from "./config";
 import { getSecretStoreAdapter } from "./secrets/store";
 
@@ -12,5 +12,5 @@ export const writeActiveAuthFilesIfCurrent = async (
   if (!current || current.accountId !== accountId) return null;
 
   const payload = await getSecretStoreAdapter().load(accountId);
-  return writeAllAuthFiles(payload);
+  return writeAuthFiles(payload, config.targets ?? []);
 };

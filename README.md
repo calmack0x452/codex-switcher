@@ -171,6 +171,10 @@ cdx migrate-secrets
 | `cdx switch` | Switch account (interactive picker) |
 | `cdx switch --next` | Cycle to next account |
 | `cdx switch <id>` | Switch to specific account |
+| `cdx switch <id> --targets opencode,codex` | Override managed auth targets for this switch only |
+| `cdx targets` | Show managed auth targets |
+| `cdx targets opencode` | Manage only OpenCode auth files |
+| `cdx targets opencode codex` | Manage multiple auth targets (`opencode`, `codex`, `pi`) |
 | `cdx label` | Label an account (interactive) |
 | `cdx label <account> <label>` | Assign label directly |
 | `cdx status` | Show account status, token expiry, and usage |
@@ -244,7 +248,9 @@ Completions include command names, options, `--secret-store` values, and account
 - **Codex CLI:** `%USERPROFILE%\\.codex\\auth.json`
 - **Pi Agent:** `%USERPROFILE%\\.pi\\agent\\auth.json` (or `%PI_CODING_AGENT_DIR%\\auth.json`)
 
-`cdx` writes Codex CLI auth only when `id_token` exists.
+By default, `cdx` manages all supported auth targets: OpenCode, Codex CLI, and Pi Agent.
+Use `cdx targets opencode` to manage only OpenCode. Unmanaged auth files are left unchanged.
+`cdx` writes or clears Codex CLI auth only when `codex` is selected as a managed target.
 
 ## For Developers
 
@@ -279,6 +285,7 @@ And create the accounts list manually:
 {
   "current": 0,
   "secretStore": "auto",
+  "targets": ["opencode", "codex", "pi"],
   "accounts": [
     { "accountId": "ACCOUNT_ID", "keychainService": "cdx-openai-ACCOUNT_ID" }
   ]

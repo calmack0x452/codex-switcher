@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_AUTH_TARGETS } from "./auth-targets";
 import { getPaths } from "./paths";
-import type { OAuthPayload } from "./types";
+import type { AuthTarget, OAuthPayload } from "./types";
 
 const readExistingJson = async (filePath: string): Promise<Record<string, unknown>> => {
   if (!existsSync(filePath)) return {};
@@ -74,42 +75,75 @@ export const writePiAuthFile = async (payload: OAuthPayload): Promise<void> => {
   await writeFile(piAuthPath, JSON.stringify(existing, null, 2), "utf8");
 };
 
+export type AuthTargetWriteStatus =
+  | "written"
+  | "skipped"
+  | "missing-id-token"
+  | "cleared-missing-id-token";
+
 export type WriteAuthResult = {
+  opencodeWritten: boolean;
   piWritten: boolean;
   codexWritten: boolean;
   codexMissingIdToken: boolean;
   codexCleared: boolean;
+  targetResults: Record<AuthTarget, AuthTargetWriteStatus>;
 };
 
-export const writeAllAuthFiles = async (payload: OAuthPayload): Promise<WriteAuthResult> => {
-  await writeAuthFile(payload);
-  await writePiAuthFile(payload);
+export const writeAuthFiles = async (
+  payload: OAuthPayload,
+  targets: readonly AuthTarget[],
+): Promise<WriteAuthResult> => {
+  const selectedTargets = new Set<AuthTarget>(targets);
+  const targetResults: Record<AuthTarget, AuthTargetWriteStatus> = {
+    opencode: "skipped",
+    codex: "skipped",
+    pi: "skipped",
+  };
 
-  if (payload.idToken) {
-    await writeCodexAuthFile(payload);
-    return {
-      piWritten: true,
-      codexWritten: true,
-      codexMissingIdToken: false,
-      codexCleared: false,
-    };
+  if (selectedTargets.has("opencode")) {
+    await writeAuthFile(payload);
+    targetResults.opencode = "written";
   }
 
-  const { codexAuthPath } = getPaths();
+  if (selectedTargets.has("pi")) {
+    await writePiAuthFile(payload);
+    targetResults.pi = "written";
+  }
+
   let codexCleared = false;
-  if (existsSync(codexAuthPath)) {
-    try {
-      await rm(codexAuthPath);
-      codexCleared = true;
-    } catch {
-      codexCleared = false;
+  if (selectedTargets.has("codex")) {
+    if (payload.idToken) {
+      await writeCodexAuthFile(payload);
+      targetResults.codex = "written";
+    } else {
+      const { codexAuthPath } = getPaths();
+      if (existsSync(codexAuthPath)) {
+        try {
+          await rm(codexAuthPath);
+          codexCleared = true;
+        } catch {
+          codexCleared = false;
+        }
+      }
+
+      targetResults.codex = codexCleared
+        ? "cleared-missing-id-token"
+        : "missing-id-token";
     }
   }
 
   return {
-    piWritten: true,
-    codexWritten: false,
-    codexMissingIdToken: true,
+    opencodeWritten: targetResults.opencode === "written",
+    piWritten: targetResults.pi === "written",
+    codexWritten: targetResults.codex === "written",
+    codexMissingIdToken:
+      targetResults.codex === "missing-id-token" ||
+      targetResults.codex === "cleared-missing-id-token",
     codexCleared,
+    targetResults,
   };
 };
+
+export const writeAllAuthFiles = async (payload: OAuthPayload): Promise<WriteAuthResult> =>
+  writeAuthFiles(payload, DEFAULT_AUTH_TARGETS);

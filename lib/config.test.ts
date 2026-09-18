@@ -79,4 +79,47 @@ describe("config", () => {
     const config = await loadConfig();
     expect(config.secretStore).toBeUndefined();
   });
+
+  it("defaults missing targets to all supported auth targets", async () => {
+    await saveConfig({
+      current: 0,
+      accounts: [{ accountId: "acc", keychainService: "cdx-openai-acc" }],
+    });
+
+    const config = await loadConfig();
+    expect(config.targets).toEqual(["opencode", "codex", "pi"]);
+  });
+
+  it("drops invalid target values on loadConfig", async () => {
+    const { configDir, configPath } = getPaths();
+    mkdirSync(configDir, { recursive: true });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        current: 0,
+        targets: ["opencode", "invalid", "pi", "opencode"],
+        accounts: [{ accountId: "acc", keychainService: "cdx-openai-acc" }],
+      }),
+      "utf8",
+    );
+
+    const config = await loadConfig();
+    expect(config.targets).toEqual(["opencode", "pi"]);
+  });
+
+  it("rejects configs with no valid targets", async () => {
+    const { configDir, configPath } = getPaths();
+    mkdirSync(configDir, { recursive: true });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        current: 0,
+        targets: ["invalid"],
+        accounts: [{ accountId: "acc", keychainService: "cdx-openai-acc" }],
+      }),
+      "utf8",
+    );
+
+    await expect(loadConfig()).rejects.toThrow("targets must include at least one valid auth target");
+  });
 });

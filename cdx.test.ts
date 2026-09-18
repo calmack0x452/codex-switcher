@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -40,6 +40,13 @@ describe("cdx CLI", () => {
       expect(keyringCmd?.description()).toBe(
         "Setup and diagnose Linux gnome-keyring/Secret Service support",
       );
+    });
+
+    it("has targets command registered", () => {
+      const program = createProgram();
+      const targetsCmd = program.commands.find((cmd) => cmd.name() === "targets");
+      expect(targetsCmd).toBeDefined();
+      expect(targetsCmd?.description()).toBe("Show or set managed auth targets");
     });
 
     it("has update-self command registered", () => {
@@ -105,6 +112,7 @@ describe("cdx CLI", () => {
       expect(output).toContain("migrate-secrets");
       expect(output).toContain("doctor");
       expect(output).toContain("keyring");
+      expect(output).toContain("targets");
       expect(output).toContain("--help");
       expect(output).toContain("--version");
       expect(output).toContain("--secret-store");
@@ -165,6 +173,59 @@ describe("cdx CLI", () => {
 
       const output = result.stdout.toString();
       expect(output).toContain("--device-flow");
+    });
+
+    it("shows switch-specific help for targets override", async () => {
+      const result = Bun.spawnSync({
+        cmd: ["bun", "run", "cdx.ts", "switch", "--help"],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const output = result.stdout.toString();
+      expect(output).toContain("--targets");
+      expect(output).toContain("opencode,codex,pi");
+    });
+
+    it("shows targets command help with supported target values", async () => {
+      const result = Bun.spawnSync({
+        cmd: ["bun", "run", "cdx.ts", "targets", "--help"],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const output = result.stdout.toString();
+      expect(output).toContain("opencode|codex|pi");
+    });
+
+    it("persists configured auth targets", async () => {
+      const tempConfigHome = mkdtempSync(path.join(os.tmpdir(), "cdx-targets-"));
+      const configDir = path.join(tempConfigHome, "cdx");
+      const configPath = path.join(configDir, "accounts.json");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          current: 0,
+          accounts: [{ accountId: "acc-work", keychainService: "cdx-openai-acc-work" }],
+        }),
+        "utf8",
+      );
+
+      const result = Bun.spawnSync({
+        cmd: ["bun", "run", "cdx.ts", "targets", "opencode"],
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          XDG_CONFIG_HOME: tempConfigHome,
+          APPDATA: tempConfigHome,
+        },
+      });
+
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      expect(result.exitCode).toBe(0);
+      expect(config.targets).toEqual(["opencode"]);
     });
 
     it("shows version with --version flag", async () => {
